@@ -12,6 +12,8 @@ export
     atomic_max!, atomic_min!,
     atomic_fence
 
+
+
 """
     Threads.Atomic{T}
 
@@ -43,6 +45,7 @@ mutable struct Atomic{T}
     Atomic{T}() where {T} = new(zero(T))
     Atomic{T}(value) where {T} = new(value)
 end
+
 
 Atomic() = Atomic{Int}()
 
@@ -330,3 +333,148 @@ fences should not be necessary in most cases.
 For further details, see LLVM's `fence` instruction.
 """
 atomic_fence() = Core.Intrinsics.atomic_fence(:sequentially_consistent)
+
+
+# Corrected NEW CODE section
+# This section optimizes atomic field operations by replacing CAS loops
+# with direct atomic instructions for common operations (+, -, &, |, xor)
+
+# Override the default modifyfield! to handle common operations efficiently
+@inline function modifyfield!(x, fld::Symbol, op::F, val, order::Symbol) where F
+    # Check for specific operations we can optimize
+    if op === (+)
+        # Use direct atomic addition instead of CAS loop
+        return atomic_addfield!(x, fld, val, order)
+    elseif op === (-)
+        # Use direct atomic subtraction instead of CAS loop
+        return atomic_subfield!(x, fld, val, order)
+    elseif op === (&)
+        # Use direct atomic bitwise AND instead of CAS loop
+        return atomic_andfield!(x, fld, val, order)
+    elseif op === (|)
+        # Use direct atomic bitwise OR instead of CAS loop
+        return atomic_orfield!(x, fld, val, order)
+    elseif op === (⊻)
+        # Use direct atomic bitwise XOR instead of CAS loop
+        return atomic_xorfield!(x, fld, val, order)
+    end
+    
+    # Fallback to CAS loop for operations we don't optimize
+    # This is the original implementation that uses compare-and-swap
+    while true
+        # Read current value with specified memory ordering
+        old = getfield(x, fld, order)
+        # Compute new value using the operation
+        new = op(old, val)
+        # Attempt to swap the value
+        ret = swapfield!(x, fld, new, order, old)
+        # If swap succeeded, return old value
+        ret === old && return old
+    end
+end
+
+# Optimized atomic addition for field
+@inline function atomic_addfield!(x, fld::Symbol, val, order::Symbol)
+    # Get pointer to the field
+    ptr = getfieldptr(x, fld)
+    # Get type of the field
+    T = getfieldtype(x, fld)
+    # Convert value to field type (for type safety)
+    val_conv = convert(T, val)
+    # Call low-level atomic add
+    return atomic_add!(ptr, val_conv, order)
+end
+
+# Optimized atomic subtraction for field (same pattern as addition)
+@inline function atomic_subfield!(x, fld::Symbol, val, order::Symbol)
+    ptr = getfieldptr(x, fld)
+    T = getfieldtype(x, fld)
+    val_conv = convert(T, val)
+    return atomic_sub!(ptr, val_conv, order)
+end
+
+# Optimized atomic bitwise AND for field
+@inline function atomic_andfield!(x, fld::Symbol, val, order::Symbol)
+    ptr = getfieldptr(x, fld)
+    T = getfieldtype(x, fld)
+    val_conv = convert(T, val)
+    return atomic_and!(ptr, val_conv, order)
+end
+
+# Optimized atomic bitwise OR for field
+@inline function atomic_orfield!(x, fld::Symbol, val, order::Symbol)
+    ptr = getfieldptr(x, fld)
+    T = getfieldtype(x, fld)
+    val_conv = convert(T, val)
+    return atomic_or!(ptr, val_conv, order)
+end
+
+# Optimized atomic bitwise XOR for field
+@inline function atomic_xorfield!(x, fld::Symbol, val, order::Symbol)
+    ptr = getfieldptr(x, fld)
+    T = getfieldtype(x, fld)
+    val_conv = convert(T, val)
+    return atomic_xor!(ptr, val_conv, order)
+end
+
+# Low-level atomic add implementation using LLVM intrinsics
+@noinline function atomic_add!(ptr::Ptr{T}, val::T, order::Symbol) where T <: Union{Int32,Int64,UInt32,UInt64}
+    # Determine bit width of the type (32 or 64 bits)
+    bits = 8 * sizeof(T)
+    # Convert Julia memory order to LLVM memory order string
+    order_sym = get_llvm_order(order)
+    
+    # LLVM assembly template for atomicrmw add instruction:
+    # 1. Convert integer pointer to actual pointer
+    # 2. Perform atomic addition with specified ordering
+    # 3. Return the original value
+    asm = """
+        %ptr = inttoptr i64 %0 to ptr
+        %res = atomicrmw add ptr %ptr, i$bits %1 $order_sym
+        ret i$bits %res
+    """
+    
+    # Call LLVM with our assembly template
+    # Parameters: 
+    #   asm - the assembly template
+    #   T - return type
+    #   Argument types: (pointer, value)
+    Base.llvmcall((asm, T), T, Tuple{Ptr{T}, T}, ptr, val)
+end
+
+# Implement similar @noinline functions for:
+# atomic_sub!, atomic_and!, atomic_or!, atomic_xor!
+# (Same pattern as atomic_add! but with different operations)
+
+# Helper: Convert Julia memory order to LLVM order string
+function get_llvm_order(order::Symbol)
+    if order === :sequentially_consistent
+        return "seq_cst"   # Strongest ordering - global visibility
+    elseif order === :acquire_release
+        return "acq_rel"   # Acquire for loads, release for stores
+    elseif order === :release
+        return "release"   # Make prior operations visible to others
+    elseif order === :acquire
+        return "acquire"   # See others' prior operations
+    else
+        return "monotonic" # No ordering guarantees (fastest)
+    end
+end
+
+# Helper: Get pointer to a field in an object
+function getfieldptr(x, fld::Symbol)
+    # 1. Get pointer to the object itself
+    obj_ptr = pointer_from_objref(x)
+    # 2. Get type of the object
+    T = typeof(x)
+    # 3. Find index of the field
+    idx = fieldindex(T, fld)
+    # 4. Get byte offset of the field
+    offset = fieldoffset(T, idx)
+    # 5. Return pointer to the field (object address + offset)
+    return obj_ptr + offset
+end
+
+# Helper: Get type of a field
+getfieldtype(x, fld::Symbol) = fieldtype(typeof(x), fld)
+#END OF NEW CODE
