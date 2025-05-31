@@ -30,6 +30,7 @@
 
 #include "julia.h"
 #include "julia_assert.h"
+#include <iostream>
 
 #define DEBUG_TYPE "expand-atomic-modify"
 #undef DEBUG
@@ -208,38 +209,51 @@ static std::variant<AtomicRMWInst::BinOp,bool> patternMatchAtomicRMWOp(Value *Ol
   bool verifyop = RetVal == nullptr;
   assert(verifyop ? isa<Argument>(Old) : isa<AtomicRMWInst>(Old));
   Function *Op = verifyop ? cast<Argument>(Old)->getParent() : nullptr;
-  if (verifyop && (Op->isDeclaration() || Op->isInterposable() || Op->isIntrinsic()))
+  if (verifyop && (Op->isDeclaration() || Op->isInterposable() || Op->isIntrinsic())) {
+    std::cout << "Op->isDeclaration() || Op->isInterposable() || Op->isIntrinsic()" << std::endl;
     return false;
+  }
    // TODO: peek forward from Old through any trivial casts which don't affect the instruction (e.g. i64 to f64 and back)
   if (RetVal == nullptr) {
     if (Old->use_empty()) {
       if (ValOp) *ValOp = nullptr;
+      std::cout << "AtomicRMWInst::Xchg" << std::endl;
       return AtomicRMWInst::Xchg;
     }
-    if (!Old->hasOneUse())
+    if (!Old->hasOneUse()) {
+      std::cout << "!hasOneUse" << std::endl;
       return false;
+    }
     ReturnInst *Ret = nullptr;
     for (auto &BB : *Op) {
       if (isa<ReturnInst>(BB.getTerminator())) {
-        if (Ret != nullptr)
+        if (Ret != nullptr) {
+          std::cout << "multiple returns" << std::endl;
           return false;
+        }
         Ret = cast<ReturnInst>(BB.getTerminator());
       }
     }
-    if (Ret == nullptr)
+    if (Ret == nullptr) {
+      std::cout << "no return" << std::endl;
       return false;
+    }
     // Now examine the instruction list
     RetVal = Ret->getReturnValue();
-    if (!RetVal->hasOneUse())
+    if (!RetVal->hasOneUse()) {
+      std::cout << "!hasOneUse2" << std::endl;
       return false;
+    }
   }
   if (RetVal == Old) {
     // special token indicating to convert to an atomic fence
+    std::cout << "AtomicRMWInst::OR" << std::endl;
     if (ValOp) *ValOp = nullptr;
     return AtomicRMWInst::Or;
   }
   if (Old->use_empty()) {
     if (ValOp) *ValOp = nullptr;
+    std::cout << "AtomicRMWInst::Xchg2" << std::endl;
     return AtomicRMWInst::Xchg;
   }
   if (auto BinOp = dyn_cast<BinaryOperator>(RetVal)) {
@@ -247,18 +261,25 @@ static std::variant<AtomicRMWInst::BinOp,bool> patternMatchAtomicRMWOp(Value *Ol
       if (ValOp) *ValOp = &BinOp->getOperandUse(BinOp->getOperand(0) == Old ? 1 : 0);
       switch (BinOp->getOpcode()) {
         case Instruction::Add:
+          std::cout << "AtomicRMWInst::Add" << std::endl;
           return AtomicRMWInst::Add;
         case Instruction::Sub:
+          std::cout << "AtomicRMWInst::Sub" << std::endl;
           return AtomicRMWInst::Sub;
         case Instruction::And:
+          std::cout << "AtomicRMWInst::And" << std::endl;
           return AtomicRMWInst::And;
         case Instruction::Or:
+          std::cout << "AtomicRMWInst::Or" << std::endl;
           return AtomicRMWInst::Or;
         case Instruction::Xor:
+          std::cout << "AtomicRMWInst::Xor" << std::endl;
           return AtomicRMWInst::Xor;
         case Instruction::FAdd:
+          std::cout << "AtomicRMWInst::FAdd" << std::endl;
           return AtomicRMWInst::FAdd;
         case Instruction::FSub:
+          std::cout << "AtomicRMWInst::FSub" << std::endl;
           return AtomicRMWInst::FSub;
         default:
           break;
@@ -271,12 +292,14 @@ static std::variant<AtomicRMWInst::BinOp,bool> patternMatchAtomicRMWOp(Value *Ol
           if (BinOp && BinOp->hasOneUse() && BinOp->getOpcode() == Instruction::And) {
             if ((BinOp->getOperand(0) == Old || (BinOp->isCommutative() && BinOp->getOperand(1) == Old)) && canReorderWithRMW(*BinOp, verifyop)) {
               if (ValOp) *ValOp = &BinOp->getOperandUse(BinOp->getOperand(0) == Old ? 1 : 0);
+              std::cout << "AtomicRMWInst::Nand" << std::endl;
               return AtomicRMWInst::Nand;
             }
           }
         }
       }
     }
+    std::cout << "bad binop" << std::endl;
     return false;
   } else if (auto Intr = dyn_cast<IntrinsicInst>(RetVal)) {
     if (Intr->arg_size() == 2) {
@@ -284,16 +307,22 @@ static std::variant<AtomicRMWInst::BinOp,bool> patternMatchAtomicRMWOp(Value *Ol
         if (ValOp) *ValOp = &Intr->getOperandUse(Intr->getOperand(0) == Old ? 1 : 0);
         switch (Intr->getIntrinsicID()) {
           case Intrinsic::minnum:
+            std::cout << "AtomicRMWInst::FMin" << std::endl;
             return AtomicRMWInst::FMin;
           case Intrinsic::maxnum:
+            std::cout << "AtomicRMWInst::FMax" << std::endl;
             return AtomicRMWInst::FMax;
           case Intrinsic::smax:
+            std::cout << "AtomicRMWInst::Max" << std::endl;
             return AtomicRMWInst::Max;
           case Intrinsic::umax:
+            std::cout << "AtomicRMWInst::UMax" << std::endl;
             return AtomicRMWInst::UMax;
           case Intrinsic::smin:
+            std::cout << "AtomicRMWInst::Min" << std::endl;
             return AtomicRMWInst::Min;
           case Intrinsic::umin:
+            std::cout << "AtomicRMWInst::UMin" << std::endl;
             return AtomicRMWInst::UMin;
 #if JL_LLVM_VERSION >= 200000
           case Intrinsic::usub_sat:
@@ -310,6 +339,7 @@ static std::variant<AtomicRMWInst::BinOp,bool> patternMatchAtomicRMWOp(Value *Ol
       if (Arg == Old) {
         if (canReorderWithRMW(*Intr, verifyop)) {
           if (ValOp) *ValOp = &Arg;
+          std::cout << "AtomicRMWInst::canReorder" << std::endl;
           return true;
         }
         return false;
@@ -462,6 +492,7 @@ void expandAtomicModifyToCmpXchg(CallInst &Modify,
 
 static bool expandAtomicModify(Function &F) {
   SmallVector<CallInst*> AtomicInsts;
+
 
   // Changing control-flow while iterating through it is a bad idea, so gather a
   // list of all atomic instructions before we start.

@@ -42,8 +42,6 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/MDBuilder.h>
 #include <llvm/Analysis/InstructionSimplify.h>
-#include "llvm/IR/PatternMatch.h" //RAFA CODE
-#include "llvm/IR/Instructions.h" //RAFA CODE
 
 // support
 #include <llvm/ADT/SmallBitVector.h>
@@ -226,9 +224,6 @@ STATISTIC(GeneratedCFuncWrappers, "Number of C function wrappers generated");
 STATISTIC(GeneratedCCallables, "Number of C-callable functions generated");
 STATISTIC(GeneratedInvokeWrappers, "Number of invoke wrappers generated");
 STATISTIC(EmittedFunctions, "Number of functions emitted");
-
-
-static bool optimizeAtomicRMW(Function &F); //NEW CODE RAFA
 
 extern "C" JL_DLLEXPORT_CODEGEN
 void jl_dump_emitted_mi_name_impl(void *s)
@@ -2458,141 +2453,6 @@ static void CreateConditionalAbort(IRBuilder<> &irbuilder, Value *test)
 
 
 #include "cgutils.cpp"
-
-//NEW CODE RAFA
-static bool optimizeAtomicRMW(Function &F) {
-    bool changed = false;                      //; Tracks if we modified the function
-    SmallVector<Instruction*, 16> ToRemove;    //; Stores dead instructions for cleanup
-    using namespace llvm::PatternMatch;        //; Enables LLVM's pattern matching DSL
-
-    //; Walk through all basic blocks in the function
-    for (BasicBlock &BB : F) {
-        //; Scan each instruction in current block
-        for (Instruction &I : BB) {
-            //; Try to cast instruction to Compare-and-Swap (CAS)
-            auto *CI = dyn_cast<AtomicCmpXchgInst>(&I);
-            if (!CI) continue;                 //; Skip non-CAS instructions
-
-            //; Verify CAS is used in simple RMW pattern
-            bool isSimpleRMW = true;
-            Value *extractedOldVal = nullptr;   //; Will store old value extractor
-            
-            //; Inspect all users of this CAS instruction
-            for (User *U : CI->users()) {
-                auto *EVI = dyn_cast<ExtractValueInst>(U);
-                //; Non-extract user? → Complex pattern → Skip
-                if (!EVI) { isSimpleRMW = false; break; }
-                //; Invalid extract indices? → Skip
-                if (EVI->getIndices().size() != 1) { isSimpleRMW = false; break; }
-                //; Track extractor for old value (index 0)
-                if (EVI->getIndices()[0] == 0) extractedOldVal = EVI;
-            }
-            
-            //; Skip if not simple RMW or missing old value extractor
-            if (!isSimpleRMW || !extractedOldVal) continue;
-
-            //; Analyze CAS operation components
-            Value *OldVal = CI->getCompareOperand();  //; Expected current value
-            Value *NewVal = CI->getNewValOperand();    //; New value to store
-            
-            //; Try to match arithmetic/logic patterns
-            AtomicRMWInst::BinOp OpCode;
-            Value *RHS = nullptr;  //; Will store right-hand operand
-            
-            //; PATTERN MATCHING:
-            //; new_val = old_val OP right_hand_side
-            if (match(NewVal, m_Add(m_Specific(OldVal), m_Value(RHS))))
-                OpCode = AtomicRMWInst::Add;       //; Addition pattern
-            else if (match(NewVal, m_Sub(m_Specific(OldVal), m_Value(RHS))))
-                OpCode = AtomicRMWInst::Sub;       //; Subtraction pattern
-            else if (match(NewVal, m_And(m_Specific(OldVal), m_Value(RHS))))
-                OpCode = AtomicRMWInst::And;       //; Bitwise AND pattern
-            else if (match(NewVal, m_Or(m_Specific(OldVal), m_Value(RHS))))
-                OpCode = AtomicRMWInst::Or;        //; Bitwise OR pattern
-            else if (match(NewVal, m_Xor(m_Specific(OldVal), m_Value(RHS))))
-                OpCode = AtomicRMWInst::Xor;       //; Bitwise XOR pattern
-            else
-                continue;  //; Unsupported operation → Skip
-            
-            //; Prepare to emit new instructions
-            IRBuilder<> Builder(CI);          //; Insert before old CAS
-            Value *Ptr = CI->getPointerOperand();  //; Memory location
-            
-            //; Calculate natural alignment for type
-            MaybeAlign Alignment;
-            if (CI->getPointerOperand()->getType()->isPointerTy()) {
-                Type *ValueType = CI->getCompareOperand()->getType();
-                if (auto *IntTy = dyn_cast<IntegerType>(ValueType)) {
-                    unsigned BitWidth = IntTy->getBitWidth();
-                    Alignment = MaybeAlign(BitWidth / 8);  //; e.g., 64-bit → 8-byte align
-                }
-            }
-            
-            //; CREATE ATOMICRMW INSTRUCTION:
-            //; This single instruction replaces entire CAS loop
-            AtomicRMWInst *RMW = Builder.CreateAtomicRMW(
-                OpCode,         //; Operation (add/sub/and/or/xor)
-                Ptr,            //; Memory address
-                RHS,            //; Operand value
-                Alignment,      //; Memory alignment
-                CI->getSuccessOrdering(),  //; Memory ordering
-                CI->getSyncScopeID()       //; Synchronization scope
-            );
-            
-            //; REPLACE OLD CAS RESULTS:
-            SmallVector<Instruction*, 4> ExtractsToRemove;
-            for (User *U : CI->users()) {
-                if (auto *EVI = dyn_cast<ExtractValueInst>(U)) {
-                    //; Case 1: Old value extractor → Replace with atomicrmw result
-                    if (EVI->getIndices()[0] == 0) {
-                        EVI->replaceAllUsesWith(RMW);
-                    }
-                    //; Case 2: Success flag → Replace with 'true' (atomicrmw always succeeds)
-                    else if (EVI->getIndices()[0] == 1) {
-                        EVI->replaceAllUsesWith(ConstantInt::getTrue(F.getContext()));
-                    }
-                    ExtractsToRemove.push_back(EVI);  //; Schedule for removal
-                }
-            }
-            
-            //; CLEANUP EXTRACTORS:
-            for (Instruction *EVI : ExtractsToRemove) {
-                EVI->eraseFromParent();  //; Remove dead extract instructions
-            }
-            
-            ToRemove.push_back(CI);  //; Mark CAS for deletion
-            changed = true;           //; Flag function modification
-        }
-    }
-    
-    //; REMOVE DEAD CAS INSTRUCTIONS:
-    for (Instruction *I : ToRemove) {
-        I->eraseFromParent();  //; Eliminate old CAS loops
-    }
-    return changed;  //; Return modification status
-}
-
-//; LLVM PASS DECLARATION
-struct LateLowerAtomicOpt : public FunctionPass {
-    static char ID;  //; Unique pass identifier
-    
-    LateLowerAtomicOpt() : FunctionPass(ID) {}  //; Constructor
-
-    //; Main pass entry point
-    bool runOnFunction(Function &F) override {
-        return optimizeAtomicRMW(F);  //; Apply optimization to function
-    }
-    
-    //; Preserve control flow structure
-    void getAnalysisUsage(AnalysisUsage &AU) const override {
-        AU.setPreservesCFG();  //; CFG remains unchanged
-    }
-};
-
-//; INITIALIZE PASS ID
-char LateLowerAtomicOpt::ID = 0;
-
-//END CODE RAFA
 
 static jl_cgval_t convert_julia_type_union(jl_codectx_t &ctx, const jl_cgval_t &v, jl_value_t *typ, Value **skip)
 {
@@ -9915,20 +9775,6 @@ jl_llvm_functions_t jl_emit_code(
         "functions compiled with custom codegen params must not be cached");
     JL_TRY {
         decls = emit_function(m, li, src, abi_at, abi_rt, params);
-        
-
-        //RAFA CODE
-        if (jl_options.opt_level > 0) {
-            Module *mod = m.getModuleUnlocked();
-            legacy::FunctionPassManager FPM(mod);
-            FPM.add(new LateLowerAtomicOpt());
-            for (Function &F : *mod) {
-                if (!F.isDeclaration()) {
-                    FPM.run(F);
-                }
-            }
-        }
-        //END OF RAFA CODE
 
         auto stream = *jl_ExecutionEngine->get_dump_emitted_mi_name_stream();
         if (stream) {

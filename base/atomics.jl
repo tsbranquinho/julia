@@ -12,8 +12,6 @@ export
     atomic_max!, atomic_min!,
     atomic_fence
 
-
-
 """
     Threads.Atomic{T}
 
@@ -344,19 +342,19 @@ atomic_fence() = Core.Intrinsics.atomic_fence(:sequentially_consistent)
     # Check for specific operations we can optimize
     if op === (+)
         # Use direct atomic addition instead of CAS loop
-        return atomic_addfield!(x, fld, val, order)
+        return atomic_addfield!(x, fld, val)
     elseif op === (-)
         # Use direct atomic subtraction instead of CAS loop
-        return atomic_subfield!(x, fld, val, order)
+        return atomic_subfield!(x, fld, val)
     elseif op === (&)
         # Use direct atomic bitwise AND instead of CAS loop
-        return atomic_andfield!(x, fld, val, order)
+        return atomic_andfield!(x, fld, val)
     elseif op === (|)
         # Use direct atomic bitwise OR instead of CAS loop
-        return atomic_orfield!(x, fld, val, order)
+        return atomic_orfield!(x, fld, val)
     elseif op === (⊻)
         # Use direct atomic bitwise XOR instead of CAS loop
-        return atomic_xorfield!(x, fld, val, order)
+        return atomic_xorfield!(x, fld, val)
     end
     
     # Fallback to CAS loop for operations we don't optimize
@@ -374,7 +372,7 @@ atomic_fence() = Core.Intrinsics.atomic_fence(:sequentially_consistent)
 end
 
 # Optimized atomic addition for field
-@inline function atomic_addfield!(x, fld::Symbol, val, order::Symbol)
+@inline function atomic_addfield!(x, fld::Symbol, val)
     # Get pointer to the field
     ptr = getfieldptr(x, fld)
     # Get type of the field
@@ -382,55 +380,53 @@ end
     # Convert value to field type (for type safety)
     val_conv = convert(T, val)
     # Call low-level atomic add
-    return atomic_add!(ptr, val_conv, order)
+    return atomic_add!(ptr, val_conv)
 end
 
 # Optimized atomic subtraction for field (same pattern as addition)
-@inline function atomic_subfield!(x, fld::Symbol, val, order::Symbol)
+@inline function atomic_subfield!(x, fld::Symbol, val)
     ptr = getfieldptr(x, fld)
     T = getfieldtype(x, fld)
     val_conv = convert(T, val)
-    return atomic_sub!(ptr, val_conv, order)
+    return atomic_sub!(ptr, val_conv)
 end
 
 # Optimized atomic bitwise AND for field
-@inline function atomic_andfield!(x, fld::Symbol, val, order::Symbol)
+@inline function atomic_andfield!(x, fld::Symbol, val)
     ptr = getfieldptr(x, fld)
     T = getfieldtype(x, fld)
     val_conv = convert(T, val)
-    return atomic_and!(ptr, val_conv, order)
+    return atomic_and!(ptr, val_conv)
 end
 
 # Optimized atomic bitwise OR for field
-@inline function atomic_orfield!(x, fld::Symbol, val, order::Symbol)
+@inline function atomic_orfield!(x, fld::Symbol, val)
     ptr = getfieldptr(x, fld)
     T = getfieldtype(x, fld)
     val_conv = convert(T, val)
-    return atomic_or!(ptr, val_conv, order)
+    return atomic_or!(ptr, val_conv)
 end
 
 # Optimized atomic bitwise XOR for field
-@inline function atomic_xorfield!(x, fld::Symbol, val, order::Symbol)
+@inline function atomic_xorfield!(x, fld::Symbol, val)
     ptr = getfieldptr(x, fld)
     T = getfieldtype(x, fld)
     val_conv = convert(T, val)
-    return atomic_xor!(ptr, val_conv, order)
+    return atomic_xor!(ptr, val_conv)
 end
 
 # Low-level atomic add implementation using LLVM intrinsics
-@noinline function atomic_add!(ptr::Ptr{T}, val::T, order::Symbol) where T <: Union{Int32,Int64,UInt32,UInt64}
+@noinline function atomic_add!(ptr::Ptr{T}, val::T) where T <: Union{Int32,Int64,UInt32,UInt64}
     # Determine bit width of the type (32 or 64 bits)
     bits = 8 * sizeof(T)
-    # Convert Julia memory order to LLVM memory order string
-    order_sym = get_llvm_order(order)
     
     # LLVM assembly template for atomicrmw add instruction:
     # 1. Convert integer pointer to actual pointer
-    # 2. Perform atomic addition with specified ordering
+    # 2. Perform atomic addition with acquire-release ordering
     # 3. Return the original value
     asm = """
         %ptr = inttoptr i64 %0 to ptr
-        %res = atomicrmw add ptr %ptr, i$bits %1 $order_sym
+        %res = atomicrmw add ptr %ptr, i$bits %1 acq_rel
         ret i$bits %res
     """
     
@@ -442,23 +438,45 @@ end
     Base.llvmcall((asm, T), T, Tuple{Ptr{T}, T}, ptr, val)
 end
 
-# Implement similar @noinline functions for:
-# atomic_sub!, atomic_and!, atomic_or!, atomic_xor!
-# (Same pattern as atomic_add! but with different operations)
+@noinline function atomic_sub!(ptr::Ptr{T}, val::T) where T <: Union{Int32,Int64,UInt32,UInt64}
+    # Same pattern as atomic_add!
+    bits = 8 * sizeof(T)
+    asm = """
+        %ptr = inttoptr i64 %0 to ptr
+        %res = atomicrmw sub ptr %ptr, i$bits %1 acq_rel
+        ret i$bits %res
+    """
+    Base.llvmcall((asm, T), T, Tuple{Ptr{T}, T}, ptr, val)
+end
 
-# Helper: Convert Julia memory order to LLVM order string
-function get_llvm_order(order::Symbol)
-    if order === :sequentially_consistent
-        return "seq_cst"   # Strongest ordering - global visibility
-    elseif order === :acquire_release
-        return "acq_rel"   # Acquire for loads, release for stores
-    elseif order === :release
-        return "release"   # Make prior operations visible to others
-    elseif order === :acquire
-        return "acquire"   # See others' prior operations
-    else
-        return "monotonic" # No ordering guarantees (fastest)
-    end
+@noinline function atomic_and!(ptr::Ptr{T}, val::T) where T <: Union{Int32,Int64,UInt32,UInt64}
+    bits = 8 * sizeof(T)
+    asm = """
+        %ptr = inttoptr i64 %0 to ptr
+        %res = atomicrmw and ptr %ptr, i$bits %1 acq_rel
+        ret i$bits %res
+    """
+    Base.llvmcall((asm, T), T, Tuple{Ptr{T}, T}, ptr, val)
+end
+
+@noinline function atomic_or!(ptr::Ptr{T}, val::T) where T <: Union{Int32,Int64,UInt32,UInt64}
+    bits = 8 * sizeof(T)
+    asm = """
+        %ptr = inttoptr i64 %0 to ptr
+        %res = atomicrmw or ptr %ptr, i$bits %1 acq_rel
+        ret i$bits %res
+    """
+    Base.llvmcall((asm, T), T, Tuple{Ptr{T}, T}, ptr, val)
+end
+
+@noinline function atomic_xor!(ptr::Ptr{T}, val::T) where T <: Union{Int32,Int64,UInt32,UInt64}
+    bits = 8 * sizeof(T)
+    asm = """
+        %ptr = inttoptr i64 %0 to ptr
+        %res = atomicrmw xor ptr %ptr, i$bits %1 acq_rel
+        ret i$bits %res
+    """
+    Base.llvmcall((asm, T), T, Tuple{Ptr{T}, T}, ptr, val)
 end
 
 # Helper: Get pointer to a field in an object

@@ -5,6 +5,7 @@
   basic operations on struct and bits values
 */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -1226,6 +1227,111 @@ JL_DLLEXPORT jl_value_t *jl_atomic_swap_bits(jl_value_t *dt, char *dst, const jl
     return v;
 }
 
+static jl_value_t *atomicrmw_add_bits(char *p, jl_value_t *rhs, size_t fsz) {
+    // considering fsz(number of bytes) call jl_atomic_fetch_add that will optimize with the atomicrmw
+    switch(fsz) {
+        case 1: {
+            printf("A1\n");
+            _Atomic(uint8_t) *a = (_Atomic(uint8_t)*)p;
+            return jl_box_uint8(atomic_fetch_add_explicit(a, *(uint8_t*)rhs, memory_order_acq_rel));
+        }
+        case 2: {
+            printf("A2\n");
+            _Atomic(uint16_t) *a = (_Atomic(uint16_t)*)p;
+            return jl_box_uint16(atomic_fetch_add_explicit(a, *(uint16_t*)rhs, memory_order_acq_rel));
+        }
+        case 4: {
+            printf("A4\n");
+            _Atomic(uint32_t) *a = (_Atomic(uint32_t)*)p;
+            return jl_box_uint32(atomic_fetch_add_explicit(a, *(uint32_t*)rhs, memory_order_acq_rel));
+        }
+        case 8: {
+            printf("A8\n");
+            _Atomic(uint64_t) *a = (_Atomic(uint64_t)*)p;
+            return jl_box_uint64(atomic_fetch_add_explicit(a, *(uint64_t*)rhs, memory_order_acq_rel));
+        }
+        default: {
+            printf("Adefault\n");
+            abort();
+        }
+    }
+}
+
+static jl_value_t *atomicrmw_and_bits(char *p, jl_value_t *rhs, size_t fsz) {
+    // considering fsz(number of bytes) call jl_atomic_fetch_and that will optimize with the atomicrmw
+    switch(fsz) {
+        case 1: {
+            _Atomic(uint8_t) *a = (_Atomic(uint8_t)*)p;
+            return jl_box_uint8(atomic_fetch_and_explicit(a, *(uint8_t*)rhs, memory_order_acq_rel));
+        }
+        case 2: {
+            _Atomic(uint16_t) *a = (_Atomic(uint16_t)*)p;
+            return jl_box_uint16(atomic_fetch_and_explicit(a, *(uint16_t*)rhs, memory_order_acq_rel));
+        }
+        case 4: {
+            _Atomic(uint32_t) *a = (_Atomic(uint32_t)*)p;
+            return jl_box_uint32(atomic_fetch_and_explicit(a, *(uint32_t*)rhs, memory_order_acq_rel));
+        }
+        case 8: {
+            _Atomic(uint64_t) *a = (_Atomic(uint64_t)*)p;
+            return jl_box_uint64(atomic_fetch_and_explicit(a, *(uint64_t*)rhs, memory_order_acq_rel));
+        }
+        default: {
+            abort();
+        }
+    }
+}
+
+static jl_value_t *atomicrmw_or_bits(char *p, jl_value_t *rhs, size_t fsz) {
+    // considering fsz(number of bytes) call jl_atomic_fetch_or that will optimize with the atomicrmw
+    switch(fsz) {
+        case 1: {
+            _Atomic(uint8_t) *a = (_Atomic(uint8_t)*)p;
+            return jl_box_uint8(atomic_fetch_or_explicit(a, *(uint8_t*)rhs, memory_order_acq_rel));
+        }
+        case 2: {
+            _Atomic(uint16_t) *a = (_Atomic(uint16_t)*)p;
+            return jl_box_uint16(atomic_fetch_or_explicit(a, *(uint16_t*)rhs, memory_order_acq_rel));
+        }
+        case 4: {
+            _Atomic(uint32_t) *a = (_Atomic(uint32_t)*)p;
+            return jl_box_uint32(atomic_fetch_or_explicit(a, *(uint32_t*)rhs, memory_order_acq_rel));
+        }
+        case 8: {
+            _Atomic(uint64_t) *a = (_Atomic(uint64_t)*)p;
+            return jl_box_uint64(atomic_fetch_or_explicit(a, *(uint64_t*)rhs, memory_order_acq_rel));
+        }
+        default: {
+            abort();
+        }
+    }
+}
+
+static jl_value_t *atomicrmw_xor_bits(char *p, jl_value_t *rhs, size_t fsz) {
+    // considering fsz(number of bytes) call jl_atomic_fetch_xor that will optimize with the atomicrmw
+    switch(fsz) {
+        case 1: {
+            _Atomic(uint8_t) *a = (_Atomic(uint8_t)*)p;
+            return jl_box_uint8(atomic_fetch_xor_explicit(a, *(uint8_t*)rhs, memory_order_acq_rel));
+        }
+        case 2: {
+            _Atomic(uint16_t) *a = (_Atomic(uint16_t)*)p;
+            return jl_box_uint16(atomic_fetch_xor_explicit(a, *(uint16_t*)rhs, memory_order_acq_rel));
+        }
+        case 4: {
+            _Atomic(uint32_t) *a = (_Atomic(uint32_t)*)p;
+            return jl_box_uint32(atomic_fetch_xor_explicit(a, *(uint32_t*)rhs, memory_order_acq_rel));
+        }
+        case 8: {
+            _Atomic(uint64_t) *a = (_Atomic(uint64_t)*)p;
+            return jl_box_uint64(atomic_fetch_xor_explicit(a, *(uint64_t*)rhs, memory_order_acq_rel));
+        }
+        default: {
+            abort();
+        }
+    }
+}
+
 JL_DLLEXPORT int jl_atomic_bool_cmpswap_bits(char *dst, const jl_value_t *expected, const jl_value_t *src, int nb)
 {
     // dst must have the required alignment for an atomic of the given size
@@ -1954,6 +2060,7 @@ jl_value_t *swap_nth_field(jl_datatype_t *st, jl_value_t *v, size_t i, jl_value_
 inline jl_value_t *modify_value(jl_value_t *ty, _Atomic(jl_value_t*) *p, jl_value_t *parent, jl_value_t *op, jl_value_t *rhs, int isatomic, jl_module_t *mod, jl_sym_t *name)
 {
     jl_value_t *r = isatomic ? jl_atomic_load(p) : jl_atomic_load_relaxed(p);
+    return r;
     if (__unlikely(r == NULL)) {
         if (mod && name)
             jl_undefined_var_error(name, (jl_value_t*)mod);
@@ -1989,6 +2096,7 @@ inline jl_value_t *modify_value(jl_value_t *ty, _Atomic(jl_value_t*) *p, jl_valu
 
 inline jl_value_t *modify_bits(jl_value_t *ty, char *p, uint8_t *psel, jl_value_t *parent, jl_value_t *op, jl_value_t *rhs, enum atomic_kind isatomic)
 {
+    fprintf(stdout, "HERE\n");
     int hasptr;
     int isunion = psel != NULL;
     if (isunion) {
@@ -2030,12 +2138,65 @@ inline jl_value_t *modify_bits(jl_value_t *ty, char *p, uint8_t *psel, jl_value_
         }
         jl_value_t *yty = jl_typeof(y);
         if (isatomic && !needlock) {
-            assert(yty == rty);
-            if (jl_atomic_bool_cmpswap_bits(p, r, y, fsz)) {
-                if (hasptr)
-                    jl_gc_multi_wb(parent, y); // y is immutable
+            fprintf(stdout, "HERE2\n");
+
+            static jl_function_t *f_plus   = NULL;
+            static jl_function_t *f_minus  = NULL;
+            static jl_function_t *f_and    = NULL;
+            static jl_function_t *f_or     = NULL;
+            static jl_function_t *f_xor    = NULL;
+            if (__unlikely(f_plus == NULL)) {
+                // pega a funcão genérica '+' do módulo Base
+                f_plus  = jl_get_function(jl_base_module, "+");
+                f_minus = jl_get_function(jl_base_module, "-");
+                f_and   = jl_get_function(jl_base_module, "&");
+                f_or    = jl_get_function(jl_base_module, "|");
+                // em Julia, bitwise xor é a função “xor” (não “^”)
+                f_xor   = jl_get_function(jl_base_module, "xor");
+                // Atenção: certifique‐se de que essas entradas existem; mas, por padrão,
+                // Base já define “+”, “-“, “&”, “|” e “xor” para inteiros.
+                assert(f_plus  != NULL &&
+                    f_minus != NULL &&
+                    f_and   != NULL &&
+                    f_or    != NULL &&
+                    f_xor   != NULL);
+            }
+            printf("1\n");
+            if (op == (jl_value_t*)f_plus || op == (jl_value_t*)f_minus) {
+                jl_value_t *old_value = atomicrmw_add_bits(p, rhs, fsz);
+                printf("2\n");
+                if (hasptr) 
+                    jl_gc_multi_wb(parent, y);
+                r = old_value;
                 break;
             }
+            if (op == (jl_value_t*)f_and) {
+                jl_value_t *old_value = atomicrmw_and_bits(p, rhs, fsz);
+                printf("3\n");
+                if (hasptr) 
+                    jl_gc_multi_wb(parent, y);
+                r = old_value;
+                break;
+            }
+            if (op == (jl_value_t*)f_or) {
+                printf("4\n");
+                jl_value_t *old_value = atomicrmw_or_bits(p, rhs, fsz);
+                if (hasptr) jl_gc_multi_wb(parent, rhs);
+                r = old_value;
+                break;
+            }
+            if (op == (jl_value_t*)f_xor) {
+                printf("5\n");
+                jl_value_t *old_value = atomicrmw_xor_bits(p, rhs, fsz);
+                if (hasptr) jl_gc_multi_wb(parent, rhs);
+                r = old_value;
+                break;
+            }
+            //if (jl_atomic_bool_cmpswap_bits(p, r, y, fsz)) {
+            //    if (hasptr)
+            //        jl_gc_multi_wb(parent, y); // y is immutable
+            //    break;
+            //}
         }
         else {
             char *px = lock(p, parent, needlock, isatomic);
@@ -2069,7 +2230,7 @@ inline jl_value_t *modify_bits(jl_value_t *ty, char *p, uint8_t *psel, jl_value_
         }
         jl_gc_safepoint();
     }
-    // args[0] == r (old)
+    //args[0] == r (old)
     // args[1] == y (new)
     jl_datatype_t *rettyp = jl_apply_modify_type(ty);
     JL_GC_PROMISE_ROOTED(rettyp); // (JL_ALWAYS_LEAFTYPE)
@@ -2084,10 +2245,12 @@ jl_value_t *modify_nth_field(jl_datatype_t *st, jl_value_t *v, size_t i, jl_valu
     jl_value_t *ty = jl_field_type_concrete(st, i);
     char *p = (char*)v + offs;
     if (jl_field_isptr(st, i)) {
+        printf("AQUI");
         return modify_value(ty, (_Atomic(jl_value_t*)*)p, v, op, rhs, isatomic, NULL, NULL);
     }
     else {
         uint8_t *psel = jl_is_uniontype(ty) ? (uint8_t*)&p[jl_field_size(st, i) - 1] : NULL;
+        printf("AQUI2");
         return modify_bits(ty, p, psel, v, op, rhs, isatomic ? isatomic_object : isatomic_none);
     }
 }
