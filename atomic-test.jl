@@ -79,3 +79,5 @@ using .AtomicFieldTest
 
 println("=== IR de addfield! (deve sair `atomicrmw add`) ===")
 @code_llvm addfieldaa!(AtomicField(1), 3)
+
+addfieldaa!(AtomicField(1), 3)
