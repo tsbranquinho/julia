@@ -1101,7 +1101,6 @@ JL_CALLABLE(jl_f_modifyfield)
         JL_TYPECHK(modifyfield!, symbol, args[4]);
         order = jl_get_atomic_order_checked((jl_sym_t*)args[4], 1, 1);
     }
-    printf("modifyfield!CARALHOOOO312\n");
     jl_value_t *v = args[0];
     jl_datatype_t *st = (jl_datatype_t*)jl_typeof(v);
     size_t idx = get_checked_fieldindex("modifyfield!", st, v, args[1], 1);
@@ -1109,7 +1108,6 @@ JL_CALLABLE(jl_f_modifyfield)
     if (isatomic == (order == jl_memory_order_notatomic))
         jl_atomic_error(isatomic ? "modifyfield!: atomic field cannot be written non-atomically"
                                  : "modifyfield!: non-atomic field cannot be written atomically");
-    printf("modifyfield!CARALHOOOO\n");
     v = modify_nth_field(st, v, idx, args[2], args[3], isatomic); // always seq_cst, if isatomic needed at all
     return v;
 }
@@ -1434,7 +1432,6 @@ JL_CALLABLE(jl_f_modifyglobal)
 {
     enum jl_memory_order order = jl_memory_order_release;
     JL_NARGS(modifyglobal!, 4, 5);
-    printf("modifyglobal!CARALHOOOO\n");
     if (nargs == 5) {
         JL_TYPECHK(modifyglobal!, symbol, args[4]);
         order = jl_get_atomic_order_checked((jl_sym_t*)args[4], 1, 1);
@@ -1919,7 +1916,6 @@ JL_CALLABLE(jl_f_memoryrefswap)
 JL_CALLABLE(jl_f_memoryrefmodify)
 {
     enum jl_memory_order order = jl_memory_order_notatomic;
-    printf("memoryrefmodify!\n");
     JL_NARGS(memoryrefmodify!, 5, 5);
     JL_TYPECHK(memoryrefmodify!, genericmemoryref, args[0]);
     JL_TYPECHK(memoryrefmodify!, symbol, args[3]);
